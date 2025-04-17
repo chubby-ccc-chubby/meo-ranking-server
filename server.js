@@ -75,10 +75,11 @@ function colToLetter(col) {
 
 async function getRanking(keyword, storeName) {
     const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      executablePath: process.env.CHROME_BIN || undefined
-    });
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+      });
+      
   
     const page = await browser.newPage();
   
