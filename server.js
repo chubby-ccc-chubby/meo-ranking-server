@@ -20,22 +20,20 @@ app.use(express.urlencoded({ extended: true }));
 // SPREADSHEET_ID は Render.com の環境変数で設定
 const spreadsheetId = process.env.SPREADSHEET_ID;
 // creds.json のパスを指定 (プロジェクトルートにある想定)
-const credsPath = path.join(__dirname, 'creds.json');
+const credsPath = '/etc/secrets/creds.json'; // Render Secret File のパス
 let credentials;
 try {
-  // ファイルが存在するか確認してから読み込む
   if (fs.existsSync(credsPath)) {
     credentials = JSON.parse(fs.readFileSync(credsPath));
+    console.log("Successfully loaded credentials from Secret File."); // 成功ログ追加
   } else {
-    console.error(`Error: Credentials file not found at ${credsPath}`);
-    // 環境変数から読み込むフォールバックなどを検討
+    console.error(`Error: Credentials file not found at ${credsPath}. Make sure the Secret File is configured correctly.`);
     throw new Error(`Credentials file not found at ${credsPath}`);
   }
 } catch (error) {
   console.error("Error reading or parsing credentials:", error);
-  process.exit(1); // 認証情報がないと続行できないため終了
+  process.exit(1);
 }
-
 
 // ▼▼▼ ヘルスチェックエンドポイントを追加 ▼▼▼
 app.get('/health', (req, res) => {
