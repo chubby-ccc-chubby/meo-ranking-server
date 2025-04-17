@@ -69,37 +69,39 @@ function colToLetter(col) {
 }
 
 async function getRanking(keyword, storeName) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-  const page = await browser.newPage();
-
-  await page.goto("https://www.google.com/maps");
-  await page.waitForSelector("input[aria-label='検索']");
-  await page.type("input[aria-label='検索']", keyword);
-  await page.keyboard.press("Enter");
-  await page.waitForTimeout(5000);
-
-  const items = await page.$$('div[role="article"]');
-  let rank = "圏外";
-
-  for (let i = 0; i < items.length; i++) {
-    try {
-      await items[i].click();
-      await page.waitForTimeout(3000);
-      const html = await page.content();
-      if (normalize(html).includes(normalize(storeName))) {
-        rank = i + 1;
-        break;
-      }
-      await page.goBack({ waitUntil: "networkidle2" });
-    } catch (_) {}
-  }
-
-  await browser.close();
-  return rank;
-}
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      executablePath: process.env.CHROME_BIN || undefined
+    });
+  
+    const page = await browser.newPage();
+  
+    await page.goto("https://www.google.com/maps");
+    await page.waitForSelector("input[aria-label='検索']");
+    await page.type("input[aria-label='検索']", keyword);
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(5000);
+  
+    const items = await page.$$('div[role="article"]');
+    let rank = "圏外";
+  
+    for (let i = 0; i < items.length; i++) {
+      try {
+        await items[i].click();
+        await page.waitForTimeout(3000);
+        const html = await page.content();
+        if (normalize(html).includes(normalize(storeName))) {
+          rank = i + 1;
+          break;
+        }
+        await page.goBack({ waitUntil: "networkidle2" });
+      } catch (_) {}
+    }
+  
+    await browser.close();
+    return rank;
+  }  
 
 app.post("/meo-ranking", async (req, res) => {
   const sheetName = req.body.sheetName;
