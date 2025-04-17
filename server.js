@@ -26,16 +26,21 @@ async function authorize() {
 }
 
 async function getKeywords(sheetName, auth) {
-  const sheets = google.sheets({ version: "v4", auth });
-  const ranges = [`${sheetName}!R1:W1`, `${sheetName}!AA1:AO1`];
-
-  const res = await sheets.spreadsheets.values.batchGet({
-    spreadsheetId,
-    ranges,
-  });
-
-  return res.data.valueRanges.flatMap((range) => range.values[0] || []);
-}
+    const sheets = google.sheets({ version: "v4", auth });
+    const ranges = [`${sheetName}!R1:W1`, `${sheetName}!AA1:AO1`];
+  
+    const res = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId,
+      ranges,
+    });
+  
+    // キーワード配列を展開して、空でないものだけを残す
+    const keywords = res.data.valueRanges.flatMap((range) => {
+      return (range.values && range.values[0]) ? range.values[0].filter((v) => v && v.trim() !== "") : [];
+    });
+  
+    return keywords;
+  }  
 
 async function writeRanking(sheetName, columnIndex, rank, auth) {
   const sheets = google.sheets({ version: "v4", auth });
