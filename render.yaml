@@ -2,17 +2,6 @@ services:
   - type: web
     name: meo-ranking-server
     env: node
-    buildCommand: bash render-build.sh
+    buildCommand: bash render-build.sh # ←★この行を確認
     startCommand: node server.js
-    envVars:
-      - key: NODE_VERSION
-        value: 22.14.0 # 必要に応じて Node.js のバージョンを指定
-      # ↓↓↓ ビルドログで確認したChromeの実際のパスに書き換える ↓↓↓
-      - key: PUPPETEER_EXECUTABLE_PATH
-        # 例: value: /opt/render/.cache/puppeteer/chrome/linux-123.0.6312.58/chrome-linux/chrome
-        value: (ここにビルドログで確認したChromeのパスを貼り付け)
-      - key: NODE_ENV # 本番環境であることを示す（推奨）
-        value: production
-      # .envファイルの内容をRender.comのSecret Filesや環境変数で管理することを検討
-      # - key: SPREADSHEET_ID
-      #   fromSecret: true # 例: Secret Fileを使用する場合
+    # ... (envVarsなど) ...
