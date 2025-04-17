@@ -1,2 +1,4 @@
 #!/bin/bash
-PUPPETEER_SKIP_DOWNLOAD=false npm install
+
+npx puppeteer browsers install chrome
+npm install
