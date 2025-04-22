@@ -202,7 +202,7 @@ async function getRanking(keyword, storeName) {
     // ★★★ 新しいセレクタ候補 (要検証・変更) ★★★
     // Googleの構造は頻繁に変わるので、これらのセレクタも試行錯誤が必要
     // 候補1: role="article" を持つdiv
-    const resultSelector = 'div[role="article"]';
+    const resultSelector = '#search';
     // 候補2: より具体的なクラス名 (変わりやすい)
     // const resultSelector = '.Nv2PK'; // このクラス名は例。実際のクラス名を調査
     // 候補3: さらに別の構造を試す
