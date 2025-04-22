@@ -182,49 +182,74 @@ function colToLetter(column) {
   return letter;
 }
 
+// server.js 内の getRanking 関数を以下に置き換え
+
 async function getRanking(keyword, storeName) {
   console.log(`Starting getRanking (Top 20) for keyword: "${keyword}", storeName: "${storeName}"`);
-  const options = { /* ... (以前と同じ) ... */ };
+
+  // ▼▼▼ options オブジェクトを正しく定義 ▼▼▼
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  const options = {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', // メモリ不足対策に役立つことがある
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu' // GPU不要
+      ],
+      // ★★★ executablePath を options に含める ★★★
+      executablePath: executablePath // 環境変数で取得したパスを指定
+  };
+
+  // ★★★ executablePath が設定されているか最終確認 ★★★
+  if (!options.executablePath) {
+      console.error("!!! CRITICAL ERROR: PUPPETEER_EXECUTABLE_PATH is not set or not passed to options. Cannot launch browser.");
+      return "取得失敗(実行パス未設定)"; // 起動前にエラーを返す
+  }
+  // ▲▲▲ ここまで options 定義 ▲▲▲
+
   console.log("!!! Launching Puppeteer with options:", JSON.stringify(options, null, 2));
-  console.log("!!! Value of process.env.PUPPETEER_EXECUTABLE_PATH:", process.env.PUPPETEER_EXECUTABLE_PATH);
+  console.log("!!! Value of process.env.PUPPETEER_EXECUTABLE_PATH:", executablePath); // 確認用
 
   let browser;
   try {
-    browser = await puppeteer.launch(options);
+    // 正しい options を渡して起動
+    browser = await puppeteer.launch(options); // puppeteer-core を使用
+
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
 
     console.log(`Navigating to Google Maps for keyword: "${keyword}"`);
-    const searchUrl = `http://googleusercontent.com/maps.google.com/6${encodeURIComponent(keyword)}`;
-    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 90000 }); // タイムアウト延長
+    // Google Maps の検索 URL を修正 (ドメイン部分とパスを確認)
+    // const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(keyword)}`;
+    // 以前使っていた googleusercontent.com ドメインは特殊な用途の可能性あり
+    // より一般的なドメインを試す
+    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(keyword)}`;
+    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 }); // gotoタイムアウトを60秒に
 
     console.log(`Waiting for search results (Top 20) for keyword: "${keyword}"`);
-    // ★★★ 新しいセレクタ候補 (要検証・変更) ★★★
-    // Googleの構造は頻繁に変わるので、これらのセレクタも試行錯誤が必要
-    // 候補1: role="article" を持つdiv
-    const resultSelector = '#search';
-    // 候補2: より具体的なクラス名 (変わりやすい)
-    // const resultSelector = '.Nv2PK'; // このクラス名は例。実際のクラス名を調査
-    // 候補3: さらに別の構造を試す
-    // const resultSelector = 'a.hfpxzc'; // リンク要素を試す場合など
-
+    // セレクタは依然として最重要課題 (現在のGoogle Mapsに合わせて要調整)
+    const resultSelector = 'div[role="article"]'; // 以前試したセレクタ（要検証）
     try {
-      await page.waitForSelector(resultSelector, { timeout: 30000 }); // タイムアウトを30秒に
+      await page.waitForSelector(resultSelector, { timeout: 30000 }); // 30秒待機
     } catch (waitError) {
-      console.error(`Timeout or error waiting for search results selector (${resultSelector}) for keyword: "${keyword}".`);
+      console.error(`Timeout or error waiting for search results selector (${resultSelector}) for keyword: "${keyword}". Page structure might have changed.`);
+      // ページの内容をログに出力してデバッグする
+      const pageContentForDebug = await page.content();
+      console.error("Page content on selector timeout:", pageContentForDebug.substring(0, 500)); // 先頭500文字だけ表示
       await browser.close();
-      return "取得失敗(セレクタ)"; // エラー理由を明確化
+      return "取得失敗(セレクタ)";
     }
-
-    // ★★★ スクロール処理は削除 ★★★
 
     console.log(`Extracting top 20 search results for keyword: "${keyword}"`);
     const items = await page.$$(resultSelector);
     console.log(`Found ${items.length} items initially for keyword: "${keyword}"`);
 
-    let rank = 0; // 見つからない場合のデフォルト値を 0 に変更
+    let rank = 0; // 見つからない場合は 0
 
-    // ★★★ 上位20件に制限 ★★★
     const limit = Math.min(items.length, 20);
     console.log(`Checking top ${limit} items...`);
 
@@ -234,22 +259,20 @@ async function getRanking(keyword, storeName) {
       try {
         // 店舗名の取得ロジック (セレクタは要検証)
         storeNameOnMap = await item.evaluate(el => {
-            // 候補1: aria-label
             const ariaLabel = el.getAttribute('aria-label');
             if (ariaLabel) return ariaLabel;
-            // 候補2: 特定のクラス名を持つ要素 (要検証)
-            const titleElement = el.querySelector('.qBF1Pd span, .fontHeadlineSmall'); // 複数の可能性のあるセレクタ
+            const titleElement = el.querySelector('.fontHeadlineSmall, .qBF1Pd span'); // セレクタ候補例
             if (titleElement) return titleElement.textContent;
             return null;
         });
 
         if (storeNameOnMap) {
             storeNameOnMap = storeNameOnMap.trim();
-             console.log(`Checking item ${i + 1}: "${storeNameOnMap}" against target: "${storeName}"`); // 必要ならログを有効化
+            // console.log(`Checking item ${i + 1}: "${storeNameOnMap}" against target: "${storeName}"`);
             if (normalize(storeNameOnMap).includes(normalize(storeName))) {
               rank = i + 1;
               console.log(`Rank found: ${rank} for keyword: "${keyword}"`);
-              break; // 見つかったらループ終了
+              break;
             }
         } else {
              // console.log(`Could not extract store name from item ${i + 1}`);
@@ -265,14 +288,22 @@ async function getRanking(keyword, storeName) {
 
     await browser.close();
     console.log(`Finished getRanking (Top 20) for keyword: "${keyword}". Rank: ${rank}`);
-    return rank; // 順位 (1-20) または 0 を返す
+    return rank;
 
   } catch (error) {
     console.error(`Error in getRanking for keyword "${keyword}":`, error);
     if (browser) {
       await browser.close();
     }
-    return "取得失敗(エラー)"; // その他の予期せぬエラー
+    // エラーメッセージに基づいて返す文字列を変える
+    if (error.message.includes('executablePath')) {
+        return "取得失敗(実行パス)";
+    } else if (error.message.includes('selector')) {
+         return "取得失敗(セレクタ)";
+    } else if (error.message.includes('Navigation timeout')) {
+         return "取得失敗(ページ読込タイムアウト)";
+    }
+    return "取得失敗(不明なエラー)";
   }
 }
 
