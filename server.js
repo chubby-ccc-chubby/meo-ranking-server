@@ -1,7 +1,7 @@
-// server.js (上位100件検索 + スクロール試行 + 戻り値"over" 版)
+// server.js (書き込み行固定・最終版)
 require("dotenv").config();
 const express = require("express");
-const puppeteer = require("puppeteer-core"); // puppeteer-core を使用
+const puppeteer = require("puppeteer-core");
 const { google } = require("googleapis");
 const fs = require("fs");
 const cors = require("cors");
@@ -92,21 +92,54 @@ async function getKeywords(sheetName, auth) {
     }
 }
 
-async function writeRankingToSheet(sheetName, columnIndex, rank) {
+// ▼▼▼ 次に書き込むべき行番号を取得するヘルパー関数 ▼▼▼
+async function getTargetRowForNextWrite(sheetName, auth) {
+  const sheets = google.sheets({ version: 'v4', auth });
+  // MEOランクを書き込む可能性のある列を含む範囲を確認 (R列から右のデータで判断)
+  const rangeToCheck = `${sheetName}!R:AQ`; // チェック範囲をMEO列に絞る
+  console.log(`[getTargetRow] Checking range ${rangeToCheck} to find last row with rank data.`);
   try {
-    const auth = await authorize();
-    const sheets = google.sheets({ version: 'v4', auth });
-    const rangeToCheck = `${sheetName}!A:AQ`;
-    // console.log(`[NodeWrite] Checking range ${rangeToCheck} to find last row for writing.`);
-    const getRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: rangeToCheck });
+    const getRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: rangeToCheck,
+    });
     const rows = getRes.data.values;
-    let lastRowWithAnyData = rows ? rows.length : 0;
-    const targetRow = lastRowWithAnyData + 1;
+    let lastRowWithRankData = 0;
+    if (rows) {
+      // データ(空文字やnull以外)がある最後の行を探す
+      for (let i = rows.length - 1; i >= 0; i--) {
+        // 行が存在し、かつその行のいずれかのセルに値があるかチェック
+        if (rows[i] && rows[i].some(cell => cell !== null && cell !== undefined && cell !== '')) {
+          lastRowWithRankData = i + 1; // 1始まりの行番号
+          break;
+        }
+      }
+    }
+    // データがある最終行の次の行をターゲットとする
+    const targetRow = lastRowWithRankData + 1;
+    // ヘッダー行(1行目)なども考慮し、最低でも2行目から書き込む等の調整が必要ならここで行う
+    // 例: const targetRow = Math.max(2, lastRowWithRankData + 1);
+    console.log(`[getTargetRow] Determined target row for this run: ${targetRow} (based on last data in ${rangeToCheck})`);
+    return targetRow;
+  } catch (error) {
+    console.error(`[getTargetRow] Error finding target row for sheet ${sheetName}:`, error.response ? error.response.data : error.message);
+    console.warn("[getTargetRow] Falling back to target row 2 due to error.");
+    return 2; // エラー時は安全策として2行目などを返す（要検討）
+  }
+}
+// ▲▲▲ 次に書き込むべき行番号を取得するヘルパー関数 ▲▲▲
+
+
+// ▼▼▼ writeRankingToSheet: targetRow を引数で受け取るように変更 ▼▼▼
+async function writeRankingToSheet(sheetName, columnIndex, rank, targetRow, auth) { // auth も引数で受け取る
+  try {
+    const sheets = google.sheets({ version: 'v4', auth }); // 渡された auth を使う
+
     const targetColIndex = columnIndex < 6 ? 18 + columnIndex : 27 + (columnIndex - 6);
     const targetColLetter = colToLetter(targetColIndex);
-    const targetCell = `${sheetName}!${targetColLetter}${targetRow}`;
+    const targetCell = `${sheetName}!${targetColLetter}${targetRow}`; // 引数の targetRow を使う
 
-    console.log(`[NodeWrite] Determined target row: ${targetRow}. Writing rank "${rank}" to ${targetCell} (Keyword index: ${columnIndex})`);
+    console.log(`[NodeWrite] Writing rank "${rank}" to ${targetCell} (Keyword index: ${columnIndex}, TargetRow: ${targetRow})`);
 
     await sheets.spreadsheets.values.update({
       spreadsheetId,
@@ -116,11 +149,13 @@ async function writeRankingToSheet(sheetName, columnIndex, rank) {
     });
     console.log(`[NodeWrite] Successfully wrote rank to ${targetCell}`);
   } catch (error) {
-    console.error(`[NodeWrite] Error writing rank for sheet ${sheetName}, keyword index ${columnIndex}:`, error.response ? error.response.data : error.message);
+    console.error(`[NodeWrite] Error writing rank for sheet ${sheetName}, keyword index ${columnIndex}, target row ${targetRow}:`, error.response ? error.response.data : error.message);
   }
 }
+// ▲▲▲ writeRankingToSheet 修正 ▲▲▲
 
-// --- Puppeteer 順位取得関数 (スクロール再実装・上位100件・戻り値"over") ---
+
+// --- Puppeteer 順位取得関数 (スクロール版、戻り値"over") ---
 async function getRanking(keyword, storeName) {
   console.log(`Starting getRanking (Attempt Top 100) for keyword: "${keyword}", storeName: "${storeName}"`);
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -129,10 +164,7 @@ async function getRanking(keyword, storeName) {
       args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-accelerated-2d-canvas','--no-first-run','--no-zygote','--disable-gpu'],
       executablePath: executablePath
   };
-  if (!options.executablePath) {
-      console.error("!!! CRITICAL ERROR: PUPPETEER_EXECUTABLE_PATH is not set!");
-      return "取得失敗(実行パス未設定)";
-  }
+  if (!options.executablePath) { return "取得失敗(実行パス未設定)"; }
   console.log("!!! Launching Puppeteer with options:", JSON.stringify(options, null, 2));
 
   let browser;
@@ -143,8 +175,8 @@ async function getRanking(keyword, storeName) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
 
     console.log(`Navigating to Google Maps for keyword: "${keyword}"`);
-    const searchUrl = `https://www.google.com/maps{encodeURIComponent(keyword)}`;
-    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(keyword)}`;
+    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 100000 });
 
     // Cookie同意ボタンクリック試行
     try {
@@ -155,7 +187,7 @@ async function getRanking(keyword, storeName) {
                 const consentButton = await page.waitForSelector(selector, { visible: true, timeout: 3000 });
                 if (consentButton) {
                     console.log(`Attempting to click consent button with selector: ${selector}`);
-                    await consentButton.click(); await page.waitForTimeout(1500);
+                    await consentButton.click(); await page.waitForTimeout(3500);
                     console.log("Consent button likely clicked."); consentButtonClicked = true; break;
                 }
             } catch (e) { /* ボタンが見つからなくてもOK */ }
@@ -169,7 +201,9 @@ async function getRanking(keyword, storeName) {
       await page.waitForSelector(resultSelector, { timeout: 30000 });
     } catch (waitError) {
       console.error(`Timeout waiting for initial search results selector (${resultSelector}) for keyword: "${keyword}".`);
-      await browser.close();
+      const pageContentForDebug = await page.content();
+      console.error("Page content on selector timeout:", pageContentForDebug.substring(0, 1000));
+      if (browser) await browser.close(); // Ensure browser is closed
       return "取得失敗(セレクタ)";
     }
 
@@ -178,7 +212,7 @@ async function getRanking(keyword, storeName) {
     let items = await page.$$(resultSelector);
     let previousHeight;
     let scrollAttempts = 0;
-    const maxScrollAttempts = 25; // 最大試行回数
+    const maxScrollAttempts = 50; // 最大試行回数
     const targetItemCount = 100;  // 目標取得件数
 
     while (items.length < targetItemCount && scrollAttempts < maxScrollAttempts) {
@@ -187,27 +221,26 @@ async function getRanking(keyword, storeName) {
         previousHeight = await page.evaluate('document.querySelector(\'[role="feed"]\')?.scrollHeight || document.body.scrollHeight');
         await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
         try {
-            await page.waitForFunction(`(document.querySelector('[role="feed"]')?.scrollHeight || document.body.scrollHeight) > ${previousHeight}`, { timeout: 7000 }); // 7秒待つ
-            await page.waitForTimeout(1000 + Math.random() * 1000); // 1-2秒待機
+            await page.waitForFunction(`(document.querySelector('[role="feed"]')?.scrollHeight || document.body.scrollHeight) > ${previousHeight}`, { timeout: 7000 });
+            await page.waitForTimeout(1000 + Math.random() * 1000);
         } catch (scrollError) {
              console.log(`Scrolling stopped: No height change detected or timeout on attempt ${scrollAttempts}.`);
-             break; // スクロール停止
+             break;
         }
-         items = await page.$$(resultSelector); // アイテム数を再取得
+         items = await page.$$(resultSelector);
     }
     console.log(`Finished scrolling attempts. Found ${items.length} items.`);
     // ▲▲▲ スクロール処理ここまで ▲▲▲
 
     // ▼▼▼ 取得したアイテムから最大100件をチェック ▼▼▼
-    let rank = "over"; // ★★★ 見つからない場合のデフォルト値を "over" に変更 ★★★
-    const limit = Math.min(items.length, targetItemCount); // 最大100件まで
+    let rank = "over"; // 見つからない場合のデフォルト値を "over" に変更
+    const limit = Math.min(items.length, targetItemCount);
     console.log(`Checking top ${limit} items...`);
 
     for (let i = 0; i < limit; i++) {
       const item = items[i];
       let storeNameOnMap = '';
       try {
-        // 店舗名取得 (aria-label)
         storeNameOnMap = await item.evaluate(el => {
             const linkElement = el.querySelector('a.hfpxzc');
             return linkElement ? linkElement.getAttribute('aria-label') : null;
@@ -217,7 +250,7 @@ async function getRanking(keyword, storeName) {
             storeNameOnMap = storeNameOnMap.trim();
             console.log(`Checking item ${i + 1}: "${storeNameOnMap}" against target: "${storeName}"`);
             if (normalize(storeNameOnMap).includes(normalize(storeName))) {
-              rank = i + 1; // 順位は1始まり
+              rank = i + 1;
               console.log(`Rank found: ${rank} for keyword: "${keyword}"`);
               break;
             }
@@ -229,13 +262,13 @@ async function getRanking(keyword, storeName) {
       }
     }
 
-    if (rank === "over") { // ★★★ ログメッセージも合わせる ★★★
+    if (rank === "over") {
         console.log(`Store "${storeName}" not found in the top ${limit} results (or within 100) for keyword: "${keyword}"`);
     }
 
     await browser.close();
     console.log(`Finished getRanking (Attempt Top 100) for keyword: "${keyword}". Rank: ${rank}`);
-    return rank; // 順位 (数値) または "over" (文字列) を返す
+    return rank;
 
   } catch (error) {
     console.error(`Error in getRanking for keyword "${keyword}":`, error);
@@ -264,8 +297,9 @@ app.post("/meo-ranking", async (req, res) => {
 
   // バックグラウンド処理
   (async () => {
+    let auth;
     try {
-      const auth = await authorize();
+      auth = await authorize(); // 最初に認証
       const keywords = await getKeywords(sheetName, auth);
 
       if (keywords.length === 0) {
@@ -273,16 +307,20 @@ app.post("/meo-ranking", async (req, res) => {
           return;
       }
 
-      console.log(`Processing ${keywords.length} keywords in background for sheet: ${sheetName}`);
+      // ★★★ ループの前に書き込み先の行番号を1回だけ決定 ★★★
+      const targetRowForThisRun = await getTargetRowForNextWrite(sheetName, auth);
+
+      console.log(`Processing ${keywords.length} keywords in background for sheet: ${sheetName}, Target Row: ${targetRowForThisRun}`);
       for (let i = 0; i < keywords.length; i++) {
         const keyword = keywords[i];
         console.log(`--- Background: Processing keyword ${i+1}/${keywords.length}: "${keyword}" ---`);
         const rank = await getRanking(keyword, sheetName);
-        await writeRankingToSheet(sheetName, i, rank); // Node.jsから書き込み
+        // ★★★ 決定した行番号を渡して書き込み ★★★
+        await writeRankingToSheet(sheetName, i, rank, targetRowForThisRun, auth);
       }
       console.log(`✅ Finished background processing all keywords for sheet: ${sheetName}`);
     } catch (e) {
-      console.error(`Unhandled error during background processing for sheet ${sheetName}:`, e.response ? e.response.data : e.message, e.stack);
+      console.error(`Unhandled error during background processing for sheet ${sheetName}:`, e.message, e.stack);
     }
   })();
 });
