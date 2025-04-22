@@ -206,45 +206,50 @@ async function getRanking(keyword, storeName) {
       return "取得失敗(セレクタ)";
     }
 
-    console.log(`Scrolling within feed container to load up to 100 results for keyword: "${keyword}"...`);
+    console.log(`Scrolling until end of results for keyword: "${keyword}"...`);
     let items = await page.$$(resultSelector);
     let previousHeight = 0;
     let scrollAttempts = 0;
-    const maxScrollAttempts = 50;
-    const targetItemCount = 100;
+    const maxScrollAttempts = 100;
 
-    while (items.length < targetItemCount && scrollAttempts < maxScrollAttempts) {
+    while (true) {
       scrollAttempts++;
-      console.log(`Scroll attempt ${scrollAttempts}/${maxScrollAttempts}. Current items: ${items.length}/${targetItemCount}`);
+      console.log(`Scroll attempt ${scrollAttempts}. Current items: ${items.length}`);
 
-      previousHeight = await page.evaluate(() => {
+      const feedHeight = await page.evaluate(() => {
         const feed = document.querySelector('[role="feed"]');
         return feed ? feed.scrollHeight : 0;
       });
 
       await page.evaluate(() => {
         const feed = document.querySelector('[role="feed"]');
-        if (feed) feed.scrollBy(0, 500);
+        if (feed) feed.scrollBy(0, 1000);
       });
 
       await new Promise(resolve => setTimeout(resolve, 1500));
 
+      const newItems = await page.$$(resultSelector);
       const newHeight = await page.evaluate(() => {
         const feed = document.querySelector('[role="feed"]');
         return feed ? feed.scrollHeight : 0;
       });
 
-      if (newHeight === previousHeight) {
-        console.log(`No height change detected. Scroll attempt ${scrollAttempts} stopped.`);
+      if (newItems.length === items.length && newHeight === feedHeight) {
+        console.log("Reached the end of scrollable list.");
         break;
       }
 
-      items = await page.$$(resultSelector);
+      items = newItems;
+      if (scrollAttempts >= maxScrollAttempts) {
+        console.log("Max scroll attempts reached.");
+        break;
+      }
     }
+
     console.log(`Finished feed scroll. Found ${items.length} items.`);
 
     let rank = "over";
-    const limit = Math.min(items.length, targetItemCount);
+    const limit = items.length;
     console.log(`Checking top ${limit} items...`);
 
     for (let i = 0; i < limit; i++) {
@@ -273,7 +278,7 @@ async function getRanking(keyword, storeName) {
     }
 
     if (rank === "over") {
-        console.log(`Store "${storeName}" not found in the top ${limit} results (or within 100) for keyword: "${keyword}"`);
+        console.log(`Store "${storeName}" not found in the top ${limit} results for keyword: "${keyword}"`);
     }
 
     await browser.close();
