@@ -196,44 +196,57 @@ async function getRanking(keyword, storeName) {
     } catch (e) { console.error("Error during consent button handling:", e); }
 
     console.log(`Waiting for initial search results for keyword: "${keyword}"`);
-    const resultSelector = 'div.Nv2PK'; // 現在有効と思われるセレクタ
+    const resultSelector = 'div.Nv2PK';
     try {
       await page.waitForSelector(resultSelector, { timeout: 30000 });
     } catch (waitError) {
       console.error(`Timeout waiting for initial search results selector (${resultSelector}) for keyword: "${keyword}".`);
       const pageContentForDebug = await page.content();
       console.error("Page content on selector timeout:", pageContentForDebug.substring(0, 1000));
-      if (browser) await browser.close(); // Ensure browser is closed
+      if (browser) await browser.close();
       return "取得失敗(セレクタ)";
     }
 
-    // ▼▼▼ スクロール処理 (最大100件取得目標) ▼▼▼
-    console.log(`Scrolling down to load up to 100 results for keyword: "${keyword}"...`);
+    // ▼▼▼ スクロール処理 (要素指定バージョン) ▼▼▼
+    console.log(`Scrolling within feed container to load up to 100 results for keyword: "${keyword}"...`);
     let items = await page.$$(resultSelector);
-    let previousHeight;
+    let previousHeight = 0;
     let scrollAttempts = 0;
-    const maxScrollAttempts = 50; // 最大試行回数
-    const targetItemCount = 100;  // 目標取得件数
+    const maxScrollAttempts = 50;
+    const targetItemCount = 100;
 
     while (items.length < targetItemCount && scrollAttempts < maxScrollAttempts) {
-        scrollAttempts++;
-        console.log(`Scroll attempt ${scrollAttempts}/${maxScrollAttempts}. Current items: ${items.length}/${targetItemCount}`);
-        previousHeight = await page.evaluate('document.querySelector(\'[role="feed"]\')?.scrollHeight || document.body.scrollHeight');
-        await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
-        try {
-            await page.waitForFunction(`(document.querySelector('[role="feed"]')?.scrollHeight || document.body.scrollHeight) > ${previousHeight}`, { timeout: 7000 });
-            await page.waitForTimeout(1000 + Math.random() * 1000);
-        } catch (scrollError) {
-             console.log(`Scrolling stopped: No height change detected or timeout on attempt ${scrollAttempts}.`);
-             break;
-        }
-         items = await page.$$(resultSelector);
+      scrollAttempts++;
+      console.log(`Scroll attempt ${scrollAttempts}/${maxScrollAttempts}. Current items: ${items.length}/${targetItemCount}`);
+
+      previousHeight = await page.evaluate(() => {
+        const feed = document.querySelector('[role="feed"]');
+        return feed ? feed.scrollHeight : 0;
+      });
+
+      await page.evaluate(() => {
+        const feed = document.querySelector('[role="feed"]');
+        if (feed) feed.scrollBy(0, 500);
+      });
+
+      await page.waitForTimeout(1500);
+
+      const newHeight = await page.evaluate(() => {
+        const feed = document.querySelector('[role="feed"]');
+        return feed ? feed.scrollHeight : 0;
+      });
+
+      if (newHeight === previousHeight) {
+        console.log(`No height change detected. Scroll attempt ${scrollAttempts} stopped.`);
+        break;
+      }
+
+      items = await page.$$(resultSelector);
     }
-    console.log(`Finished scrolling attempts. Found ${items.length} items.`);
+    console.log(`Finished feed scroll. Found ${items.length} items.`);
     // ▲▲▲ スクロール処理ここまで ▲▲▲
 
-    // ▼▼▼ 取得したアイテムから最大100件をチェック ▼▼▼
-    let rank = "over"; // 見つからない場合のデフォルト値を "over" に変更
+    let rank = "over";
     const limit = Math.min(items.length, targetItemCount);
     console.log(`Checking top ${limit} items...`);
 
@@ -280,7 +293,6 @@ async function getRanking(keyword, storeName) {
     return "取得失敗(不明なエラー)";
   }
 }
-
 
 // --- メインのエンドポイント (/meo-ranking) ---
 app.post("/meo-ranking", async (req, res) => {
