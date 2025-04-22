@@ -124,6 +124,8 @@ async function writeRankingToSheet(sheetName, columnIndex, rank) {
 }
 
 // --- Puppeteer 順位取得関数 (セレクタ修正版) ---
+// server.js 内の getRanking 関数を以下に置き換え
+
 async function getRanking(keyword, storeName) {
   console.log(`Starting getRanking (Top 20) for keyword: "${keyword}", storeName: "${storeName}"`);
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -142,15 +144,53 @@ async function getRanking(keyword, storeName) {
   try {
     browser = await puppeteer.launch(options);
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
+    // ユーザーエージェントはPC Chromeに偽装
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36');
+    // 日本語設定を試みる
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
 
     console.log(`Navigating to Google Maps for keyword: "${keyword}"`);
-    const searchUrl = `https://www.google.com/maps{encodeURIComponent(keyword)}`; // URLは元に戻す
+    // ▼▼▼ 正しいGoogleマップ検索URLに修正 ▼▼▼
+    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(keyword)}`;
     await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 }); // 60秒タイムアウト
 
+    // ▼▼▼ Cookie同意ボタンなどをクリックする試み (初回アクセス時など) ▼▼▼
+    try {
+        // 一般的な同意ボタンのセレクタやテキスト (複数試す)
+        const consentSelectors = [
+            'button[aria-label*="Accept"]', // Accept all
+            'button[aria-label*="同意"]',    // 同意する
+            'form[action*="consent"] button', // フォーム内のボタン
+            // 必要に応じて他のセレクタを追加
+        ];
+        let consentButtonClicked = false;
+        for (const selector of consentSelectors) {
+            try {
+                const consentButton = await page.waitForSelector(selector, { visible: true, timeout: 3000 }); // 短いタイムアウトで確認
+                if (consentButton) {
+                    console.log(`Attempting to click consent button with selector: ${selector}`);
+                    await consentButton.click();
+                    await page.waitForTimeout(1500); // クリック後の待機
+                    console.log("Consent button likely clicked.");
+                    consentButtonClicked = true;
+                    break; // どれか一つクリックできたらループを抜ける
+                }
+            } catch (e) {
+                // セレクタが見つからなくてもエラーとしない
+            }
+        }
+        if (!consentButtonClicked) {
+            console.log("No common consent buttons found or clicked.");
+        }
+    } catch (e) {
+        console.error("Error during consent button handling:", e);
+    }
+    // ▲▲▲ 同意ボタン処理ここまで ▲▲▲
+
+
     console.log(`Waiting for search results (Top 20) for keyword: "${keyword}"`);
-    // ▼▼▼ 提供されたHTMLに基づいてセレクタを修正 ▼▼▼
-    const resultSelector = 'div.Nv2PK'; // 各結果を囲むDIVのクラス
+    // セレクタは前回特定したものを引き続き使用（ページが正しく表示されれば見つかるはず）
+    const resultSelector = 'div.Nv2PK';
 
     try {
       await page.waitForSelector(resultSelector, { timeout: 30000 }); // 30秒待機
@@ -162,33 +202,33 @@ async function getRanking(keyword, storeName) {
       return "取得失敗(セレクタ)";
     }
 
-    // スクロール処理は削除済み
+    // (スクロール処理は削除済み)
 
     console.log(`Extracting top 20 search results for keyword: "${keyword}"`);
     const items = await page.$$(resultSelector);
     console.log(`Found ${items.length} items initially for keyword: "${keyword}"`);
 
-    let rank = 0; // 見つからない場合のデフォルトは 0
-    const limit = Math.min(items.length, 20); // 上位20件に制限
+    let rank = 0;
+    const limit = Math.min(items.length, 20);
     console.log(`Checking top ${limit} items...`);
 
     for (let i = 0; i < limit; i++) {
       const item = items[i];
       let storeNameOnMap = '';
       try {
-        // ▼▼▼ 店舗名取得方法を aria-label に修正 ▼▼▼
+        // 店舗名取得 (aria-label)
         storeNameOnMap = await item.evaluate(el => {
-            const linkElement = el.querySelector('a.hfpxzc'); // 各項目内のリンクを探す
-            return linkElement ? linkElement.getAttribute('aria-label') : null; // リンクの aria-label を取得
+            const linkElement = el.querySelector('a.hfpxzc');
+            return linkElement ? linkElement.getAttribute('aria-label') : null;
         });
 
         if (storeNameOnMap) {
             storeNameOnMap = storeNameOnMap.trim();
             console.log(`Checking item ${i + 1}: "${storeNameOnMap}" against target: "${storeName}"`);
             if (normalize(storeNameOnMap).includes(normalize(storeName))) {
-              rank = i + 1; // 順位は1始まり
+              rank = i + 1;
               console.log(`Rank found: ${rank} for keyword: "${keyword}"`);
-              break; // 見つかったらループ終了
+              break;
             }
         } else {
              console.log(`Could not extract store name (aria-label from a.hfpxzc) from item ${i + 1}`);
@@ -216,6 +256,8 @@ async function getRanking(keyword, storeName) {
   }
 }
 
+// --- server.js の残りの部分は変更ありません ---
+// (authorize, getKeywords, writeRankingToSheet, colToLetter, /meo-ranking endpoint, app.listen, etc.)
 
 // --- メインのエンドポイント (/meo-ranking) ---
 app.post("/meo-ranking", async (req, res) => {
