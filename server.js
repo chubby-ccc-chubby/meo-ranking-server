@@ -178,7 +178,6 @@ async function getRanking(keyword, storeName) {
     const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(keyword)}`;
     await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 100000 });
 
-    // Cookie同意ボタンクリック試行
     try {
         const consentSelectors = ['button[aria-label*="Accept"]', 'button[aria-label*="同意"]', 'form[action*="consent"] button'];
         let consentButtonClicked = false;
@@ -187,10 +186,10 @@ async function getRanking(keyword, storeName) {
                 const consentButton = await page.waitForSelector(selector, { visible: true, timeout: 3000 });
                 if (consentButton) {
                     console.log(`Attempting to click consent button with selector: ${selector}`);
-                    await consentButton.click(); await page.waitForTimeout(3500);
+                    await consentButton.click(); await new Promise(r => setTimeout(r, 3500));
                     console.log("Consent button likely clicked."); consentButtonClicked = true; break;
                 }
-            } catch (e) { /* ボタンが見つからなくてもOK */ }
+            } catch (e) { }
         }
         if (!consentButtonClicked) { console.log("No common consent buttons found or clicked."); }
     } catch (e) { console.error("Error during consent button handling:", e); }
@@ -207,7 +206,6 @@ async function getRanking(keyword, storeName) {
       return "取得失敗(セレクタ)";
     }
 
-    // ▼▼▼ スクロール処理 (要素指定バージョン) ▼▼▼
     console.log(`Scrolling within feed container to load up to 100 results for keyword: "${keyword}"...`);
     let items = await page.$$(resultSelector);
     let previousHeight = 0;
@@ -229,7 +227,7 @@ async function getRanking(keyword, storeName) {
         if (feed) feed.scrollBy(0, 500);
       });
 
-      await page.waitForTimeout(1500);
+      await new Promise(resolve => setTimeout(resolve, 1500));
 
       const newHeight = await page.evaluate(() => {
         const feed = document.querySelector('[role="feed"]');
@@ -244,7 +242,6 @@ async function getRanking(keyword, storeName) {
       items = await page.$$(resultSelector);
     }
     console.log(`Finished feed scroll. Found ${items.length} items.`);
-    // ▲▲▲ スクロール処理ここまで ▲▲▲
 
     let rank = "over";
     const limit = Math.min(items.length, targetItemCount);
